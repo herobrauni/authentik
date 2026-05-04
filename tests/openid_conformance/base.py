@@ -8,11 +8,12 @@ from selenium.webdriver.support import expected_conditions as ec
 
 from authentik.blueprints.tests import apply_blueprint, reconcile_app
 from authentik.providers.oauth2.models import OAuth2Provider
+from tests.live import SSLLiveMixin
 from tests.openid_conformance.conformance import Conformance
 from tests.selenium import SeleniumTestCase
 
 
-class TestOpenIDConformance(SeleniumTestCase):
+class TestOpenIDConformance(SSLLiveMixin, SeleniumTestCase):
 
     conformance: Conformance
 
@@ -59,10 +60,6 @@ class TestOpenIDConformance(SeleniumTestCase):
                 "client_secret": provider_b.client_secret,
             },
             "consent": {},
-        }
-        self.test_variant = {
-            "server_metadata": "discovery",
-            "client_registration": "static_client",
         }
 
     def run_test(

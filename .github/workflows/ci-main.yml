@@ -286,6 +286,12 @@ jobs:
             glob: tests/openid_conformance/test_oidc_basic.py
           - name: oidc_implicit
             glob: tests/openid_conformance/test_oidc_implicit.py
+          - name: oidc_rp-initiated
+            glob: tests/openid_conformance/test_oidc_rp_initiated.py
+          - name: oidc_frontchannel
+            glob: tests/openid_conformance/test_oidc_frontchannel.py
+          - name: oidc_backchannel
+            glob: tests/openid_conformance/test_oidc_backchannel.py
           - name: ssf_transmitter
             glob: tests/openid_conformance/test_ssf_transmitter.py
     steps:
