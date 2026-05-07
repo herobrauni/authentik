@@ -8,6 +8,7 @@ from typing import Any
 
 from channels.exceptions import DenyConnection
 from django.conf import settings
+from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.base import UpdateError
 from django.contrib.sessions.exceptions import SessionInterrupted
 from django.contrib.sessions.middleware import SessionMiddleware as UpstreamSessionMiddleware
@@ -17,16 +18,145 @@ from django.middleware.csrf import CSRF_SESSION_KEY
 from django.middleware.csrf import CsrfViewMiddleware as UpstreamCsrfViewMiddleware
 from django.utils.cache import patch_vary_headers
 from django.utils.http import http_date
+from django.utils.timezone import now as timezone_now
 from jwt import PyJWTError, decode, encode
 from sentry_sdk import Scope
 from structlog.stdlib import get_logger
 
-from authentik.core.models import Token, TokenIntents, User, UserTypes
+from authentik.core.models import Session, Token, TokenIntents, User, UserTypes
 from authentik.lib.config import CONFIG
 
 LOGGER = get_logger("authentik.asgi")
 ACR_AUTHENTIK_SESSION = "goauthentik.io/core/default"
 SIGNING_HASH = sha512(settings.SECRET_KEY.encode()).hexdigest()
+ACCOUNT_SESSION_COOKIE_NAME = "authentik_account_sessions"
+ACCOUNT_SESSION_COOKIE_SCHEMA = 1
+REQUEST_ATTR_ACCOUNT_SESSIONS = "authentik_account_sessions"
+REQUEST_ATTR_ACCOUNT_SESSIONS_MODIFIED = "authentik_account_sessions_modified"
+REQUEST_ATTR_SESSION_COOKIE_OVERRIDE = "authentik_session_cookie_override"
+
+
+def _normalise_account_session_entry(entry: Any) -> dict[str, Any] | None:
+    if isinstance(entry, str):
+        return {"sid": entry}
+    if not isinstance(entry, dict):
+        return None
+    session_key = entry.get("sid")
+    if not isinstance(session_key, str) or session_key == "":
+        return None
+    normalised: dict[str, Any] = {"sid": session_key}
+    user_pk = entry.get("user_pk")
+    if isinstance(user_pk, int):
+        normalised["user_pk"] = user_pk
+    browser_close = entry.get("browser_close")
+    if isinstance(browser_close, bool):
+        normalised["browser_close"] = browser_close
+    return normalised
+
+
+def decode_account_sessions(value: str | None) -> list[dict[str, Any]]:
+    """Decode the connected account session cookie."""
+    if not value:
+        return []
+    try:
+        payload = decode(value, SIGNING_HASH, algorithms=["HS256"])
+    except PyJWTError:
+        return []
+    if payload.get("schema") != ACCOUNT_SESSION_COOKIE_SCHEMA:
+        return []
+    entries = payload.get("sessions", [])
+    if not isinstance(entries, list):
+        return []
+    seen: set[str] = set()
+    normalised = []
+    for entry in entries:
+        normalised_entry = _normalise_account_session_entry(entry)
+        if not normalised_entry:
+            continue
+        session_key = normalised_entry["sid"]
+        if session_key in seen:
+            continue
+        seen.add(session_key)
+        normalised.append(normalised_entry)
+    return normalised
+
+
+def encode_account_sessions(entries: list[dict[str, Any]]) -> str:
+    """Encode connected account sessions into a signed cookie payload."""
+    return encode(
+        payload={
+            "iss": "authentik",
+            "schema": ACCOUNT_SESSION_COOKIE_SCHEMA,
+            "sessions": entries,
+        },
+        key=SIGNING_HASH,
+    )
+
+
+def get_account_session_entries(request: HttpRequest) -> list[dict[str, Any]]:
+    """Get connected account session entries from the request."""
+    return list(getattr(request, REQUEST_ATTR_ACCOUNT_SESSIONS, []))
+
+
+def set_account_session_entries(request: HttpRequest, entries: list[dict[str, Any]]):
+    """Update connected account session entries for the response cookie."""
+    setattr(request, REQUEST_ATTR_ACCOUNT_SESSIONS, entries)
+    setattr(request, REQUEST_ATTR_ACCOUNT_SESSIONS_MODIFIED, True)
+
+
+def add_account_session(
+    request: HttpRequest,
+    session_key: str,
+    user: User,
+    browser_close: bool | None = None,
+):
+    """Connect a user's authenticated session to this browser."""
+    if not session_key or not user.is_authenticated:
+        return
+    entries = [
+        entry
+        for entry in get_account_session_entries(request)
+        if entry.get("sid") != session_key and entry.get("user_pk") != user.pk
+    ]
+    if browser_close is None:
+        browser_close = request.session.get_expire_at_browser_close()
+    entries.append(
+        {
+            "sid": session_key,
+            "user_pk": user.pk,
+            "browser_close": browser_close,
+        }
+    )
+    set_account_session_entries(request, entries)
+
+
+def ensure_current_account_session(request: HttpRequest):
+    """Ensure the active authenticated session is present in the connected account cookie."""
+    authenticated_session = request.session.get("authenticatedsession", None)
+    user = authenticated_session.user if authenticated_session else getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return
+    add_account_session(request, request.session.session_key, user)
+
+
+def set_session_cookie_override(
+    request: HttpRequest,
+    session_key: str,
+    user: User | AnonymousUser,
+    browser_close: bool = True,
+    expires: Any | None = None,
+):
+    """Set the active session cookie to a different session after this request."""
+    setattr(
+        request,
+        REQUEST_ATTR_SESSION_COOKIE_OVERRIDE,
+        {
+            "session_key": session_key,
+            "user": user,
+            "browser_close": browser_close,
+            "expires": expires,
+        },
+    )
 
 
 class SessionMiddleware(UpstreamSessionMiddleware):
@@ -81,11 +211,91 @@ class SessionMiddleware(UpstreamSessionMiddleware):
     def process_request(self, request: HttpRequest):
         raw_session = request.COOKIES.get(settings.SESSION_COOKIE_NAME)
         session_key = SessionMiddleware.decode_session_key(raw_session)
+        setattr(
+            request,
+            REQUEST_ATTR_ACCOUNT_SESSIONS,
+            decode_account_sessions(request.COOKIES.get(ACCOUNT_SESSION_COOKIE_NAME)),
+        )
+        setattr(request, REQUEST_ATTR_ACCOUNT_SESSIONS_MODIFIED, False)
         request.session = self.SessionStore(
             session_key,
             last_ip=ClientIPMiddleware.get_client_ip(request),
             last_user_agent=request.META.get("HTTP_USER_AGENT", ""),
         )
+
+    def _set_session_cookie(
+        self,
+        response: HttpResponse,
+        session_key: str,
+        user: User | AnonymousUser,
+        max_age: int | None,
+        expires: str | None,
+        same_site: str,
+        secure: bool,
+    ):
+        response.set_cookie(
+            settings.SESSION_COOKIE_NAME,
+            SessionMiddleware.encode_session(session_key, user),
+            max_age=max_age,
+            expires=expires,
+            domain=settings.SESSION_COOKIE_DOMAIN,
+            path=settings.SESSION_COOKIE_PATH,
+            secure=secure,
+            httponly=settings.SESSION_COOKIE_HTTPONLY or None,
+            samesite=same_site,
+        )
+
+    def _set_account_sessions_cookie(
+        self,
+        request: HttpRequest,
+        response: HttpResponse,
+        same_site: str,
+        secure: bool,
+    ):
+        if not getattr(request, REQUEST_ATTR_ACCOUNT_SESSIONS_MODIFIED, False):
+            return
+        entries = get_account_session_entries(request)
+        if not entries:
+            response.delete_cookie(
+                ACCOUNT_SESSION_COOKIE_NAME,
+                path=settings.SESSION_COOKIE_PATH,
+                domain=settings.SESSION_COOKIE_DOMAIN,
+                samesite=same_site,
+            )
+            return
+        max_age, expires = self._get_account_sessions_cookie_expiry(entries)
+        response.set_cookie(
+            ACCOUNT_SESSION_COOKIE_NAME,
+            encode_account_sessions(entries),
+            max_age=max_age,
+            expires=expires,
+            domain=settings.SESSION_COOKIE_DOMAIN,
+            path=settings.SESSION_COOKIE_PATH,
+            secure=secure,
+            httponly=settings.SESSION_COOKIE_HTTPONLY or None,
+            samesite=same_site,
+        )
+
+    def _get_account_sessions_cookie_expiry(
+        self, entries: list[dict[str, Any]]
+    ) -> tuple[int | None, str | None]:
+        persistent_session_keys = [
+            entry["sid"] for entry in entries if not entry.get("browser_close", True)
+        ]
+        if not persistent_session_keys:
+            return None, None
+        expires_at = (
+            Session.objects.filter(
+                session_key__in=persistent_session_keys,
+                expires__gt=timezone_now(),
+            )
+            .order_by("-expires")
+            .values_list("expires", flat=True)
+            .first()
+        )
+        if not expires_at:
+            return None, None
+        return max(0, int(expires_at.timestamp() - time())), http_date(expires_at.timestamp())
 
     def process_response(self, request: HttpRequest, response: HttpResponse) -> HttpResponse:
         """
@@ -102,9 +312,10 @@ class SessionMiddleware(UpstreamSessionMiddleware):
         # Set SameSite based on whether or not the request is secure
         secure = SessionMiddleware.is_secure(request)
         same_site = "None" if secure else "Lax"
+        override = getattr(request, REQUEST_ATTR_SESSION_COOKIE_OVERRIDE, None)
         # First check if we need to delete this cookie.
         # The session should be deleted only if the session is entirely empty.
-        if settings.SESSION_COOKIE_NAME in request.COOKIES and empty:
+        if settings.SESSION_COOKIE_NAME in request.COOKIES and empty and not override:
             response.delete_cookie(
                 settings.SESSION_COOKIE_NAME,
                 path=settings.SESSION_COOKIE_PATH,
@@ -134,17 +345,36 @@ class SessionMiddleware(UpstreamSessionMiddleware):
                             "request completed. The user may have logged "
                             "out in a concurrent request, for example."
                         ) from None
-                    response.set_cookie(
-                        settings.SESSION_COOKIE_NAME,
-                        SessionMiddleware.encode_session(request.session.session_key, request.user),
-                        max_age=max_age,
-                        expires=expires,
-                        domain=settings.SESSION_COOKIE_DOMAIN,
-                        path=settings.SESSION_COOKIE_PATH,
-                        secure=secure,
-                        httponly=settings.SESSION_COOKIE_HTTPONLY or None,
-                        samesite=same_site,
+                    self._set_session_cookie(
+                        response,
+                        request.session.session_key,
+                        request.user,
+                        max_age,
+                        expires,
+                        same_site,
+                        secure,
                     )
+        if override:
+            max_age = None
+            expires = None
+            if not override.get("browser_close", True):
+                expires_at = override.get("expires")
+                if expires_at:
+                    max_age = max(0, int(expires_at.timestamp() - time()))
+                    expires = http_date(expires_at.timestamp())
+                else:
+                    max_age = request.session.get_expiry_age()
+                    expires = http_date(time() + max_age)
+            self._set_session_cookie(
+                response,
+                override["session_key"],
+                override["user"],
+                max_age,
+                expires,
+                same_site,
+                secure,
+            )
+        self._set_account_sessions_cookie(request, response, same_site, secure)
         return response
 
 

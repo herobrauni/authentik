@@ -1,8 +1,15 @@
 import "#elements/forms/HorizontalFormElement";
 import "#components/ak-switch-input";
 import "#elements/buttons/ActionButton/ak-action-button";
+import "#elements/buttons/Dropdown";
 import "@patternfly/elements/pf-tooltip/pf-tooltip.js";
 
+import {
+    AccountSession,
+    accountSessions,
+    loginWithAnotherAccount,
+    switchAccountSession,
+} from "#common/account-sessions";
 import { DEFAULT_CONFIG } from "#common/api/config";
 import { globalAK } from "#common/global";
 import { formatUserDisplayName } from "#common/users";
@@ -19,7 +26,7 @@ import { CoreApi } from "@goauthentik/api";
 
 import { msg } from "@lit/localize";
 import { html, nothing } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { guard } from "lit/directives/guard.js";
 
 import PFAvatar from "@patternfly/patternfly/components/Avatar/avatar.css";
@@ -32,12 +39,17 @@ import PFPage from "@patternfly/patternfly/components/Page/page.css";
 import PFDisplay from "@patternfly/patternfly/utilities/Display/display.css";
 
 @customElement("ak-nav-buttons")
-export class NavigationButtons extends WithNotifications(WithSession(AKElement)) {
+export class NavigationButtons extends WithNotifications(
+    WithSession(AKElement),
+) {
     @property({ type: Boolean, reflect: true })
     notificationDrawerOpen = false;
 
     @property({ type: Boolean, reflect: true })
     apiDrawerOpen = false;
+
+    @state()
+    protected accountSessions: AccountSession[] = [];
 
     static styles = [
         PFDisplay,
@@ -51,6 +63,38 @@ export class NavigationButtons extends WithNotifications(WithSession(AKElement))
         Styles,
     ];
 
+    public override connectedCallback(): void {
+        super.connectedCallback();
+        this.refreshAccountSessions();
+    }
+
+    protected async refreshAccountSessions(): Promise<void> {
+        try {
+            this.accountSessions = await accountSessions();
+        } catch (error) {
+            console.debug(
+                "authentik/nav: failed to load account sessions",
+                error,
+            );
+        }
+    }
+
+    protected switchAccount = async (
+        account: AccountSession,
+    ): Promise<void> => {
+        if (!account.active || !account.sessionUuid || account.current) {
+            return;
+        }
+        await switchAccountSession(account.sessionUuid);
+        window.location.reload();
+    };
+
+    protected addAccount = async (): Promise<void> => {
+        const { pathname, search, hash } = window.location;
+        const response = await loginWithAnotherAccount(`${pathname}${search}${hash}`);
+        window.location.assign(response.to);
+    };
+
     protected renderAPIDrawerTrigger() {
         const { apiDrawer } = this.uiConfig.enabledFeatures;
 
@@ -59,7 +103,9 @@ export class NavigationButtons extends WithNotifications(WithSession(AKElement))
                 return nothing;
             }
 
-            return html`<div class="pf-c-page__header-tools-item pf-m-hidden pf-m-visible-on-xl">
+            return html`<div
+                class="pf-c-page__header-tools-item pf-m-hidden pf-m-visible-on-xl"
+            >
                 <button
                     id="api-drawer-toggle-button"
                     class="pf-c-button pf-m-plain"
@@ -100,7 +146,9 @@ export class NavigationButtons extends WithNotifications(WithSession(AKElement))
                 return nothing;
             }
 
-            return html`<div class="pf-c-page__header-tools-item pf-m-hidden pf-m-visible-on-xl">
+            return html`<div
+                class="pf-c-page__header-tools-item pf-m-hidden pf-m-visible-on-xl"
+            >
                 <button
                     id="notification-drawer-toggle-button"
                     class="pf-c-button pf-m-plain"
@@ -111,7 +159,11 @@ export class NavigationButtons extends WithNotifications(WithSession(AKElement))
                     aria-describedby="notification-count"
                     @click=${AKDrawerChangeEvent.dispatchNotificationsToggle}
                 >
-                    <span class="pf-c-notification-badge ${notificationCount ? "pf-m-unread" : ""}">
+                    <span
+                        class="pf-c-notification-badge ${notificationCount
+                            ? "pf-m-unread"
+                            : ""}"
+                    >
                         <pf-tooltip
                             position="top"
                             content=${msg("Notification Drawer", {
@@ -135,25 +187,6 @@ export class NavigationButtons extends WithNotifications(WithSession(AKElement))
         });
     }
 
-    renderSettings() {
-        if (!this.uiConfig?.enabledFeatures.settings) {
-            return nothing;
-        }
-
-        return html`<div class="pf-c-page__header-tools-item">
-            <a
-                class="pf-c-button pf-m-plain"
-                type="button"
-                href="${globalAK().api.base}if/user/#/settings"
-                aria-label=${msg("Settings")}
-            >
-                <pf-tooltip position="top" content=${msg("Settings")}>
-                    <i class="fas fa-cog" aria-hidden="true"></i>
-                </pf-tooltip>
-            </a>
-        </div>`;
-    }
-
     renderImpersonation() {
         if (!this.impersonating) return nothing;
 
@@ -165,36 +198,146 @@ export class NavigationButtons extends WithNotifications(WithSession(AKElement))
         return html`&nbsp;
             <div class="pf-c-page__header-tools">
                 <div class="pf-c-page__header-tools-group">
-                    <ak-action-button class="pf-m-warning pf-m-small" .apiRequest=${onClick}>
+                    <ak-action-button
+                        class="pf-m-warning pf-m-small"
+                        .apiRequest=${onClick}
+                    >
                         ${msg("Stop impersonation")}
                     </ak-action-button>
                 </div>
             </div>`;
     }
 
-    renderAvatar() {
-        const { currentUser } = this;
+    protected renderAccountAvatar(avatar?: string) {
+        if (!avatar || isDefaultAvatar(avatar)) {
+            return html`<span class="account-switcher-icon" aria-hidden="true">
+                <i class="fas fa-user-circle"></i>
+            </span>`;
+        }
+        return html`<img
+            class="pf-c-avatar account-switcher-avatar"
+            src=${avatar}
+            alt=""
+        />`;
+    }
 
+    protected renderAccountMenuItem(account: AccountSession) {
+        const label =
+            formatUserDisplayName(account.user, this.uiConfig) ||
+            account.user.username;
+        return html`<li role="presentation">
+            <button
+                class="pf-c-dropdown__menu-item account-switcher-item"
+                type="button"
+                role="menuitem"
+                ?disabled=${!account.active || account.current}
+                @click=${() => this.switchAccount(account)}
+            >
+                ${this.renderAccountAvatar(account.user.avatar)}
+                <span class="account-switcher-text">
+                    <span class="account-switcher-name">${label}</span>
+                    ${account.user.email
+                        ? html`<small class="account-switcher-meta"
+                              >${account.user.email}</small
+                          >`
+                        : nothing}
+                </span>
+                ${account.current
+                    ? html`<small class="account-switcher-status"
+                          >${msg("Current")}</small
+                      >`
+                    : account.disconnected
+                      ? html`<small class="account-switcher-status"
+                            >${msg("Disconnected")}</small
+                        >`
+                      : nothing}
+            </button>
+        </li>`;
+    }
+
+    protected renderUserMenu(displayName: string) {
+        const { currentUser } = this;
         if (!currentUser) {
             return nothing;
         }
-
-        const { avatar } = currentUser;
-
-        if (!avatar || isDefaultAvatar(avatar)) {
-            return nothing;
-        }
-
-        return html`<div
-            class="pf-c-page__header-tools-item pf-c-avatar pf-m-hidden pf-m-visible-on-xl"
-            aria-hidden="true"
-        >
-            <img src=${avatar} alt=${msg("Avatar image")} />
+        const label = displayName || currentUser.username;
+        return html`<div class="pf-c-page__header-tools-group">
+            <div class="pf-c-page__header-tools-item">
+                <ak-dropdown class="pf-c-dropdown account-switcher">
+                    <button
+                        class="pf-c-dropdown__toggle pf-m-plain account-switcher-toggle"
+                        type="button"
+                        aria-label=${msg("Account menu")}
+                    >
+                        ${this.renderAccountAvatar(currentUser.avatar)}
+                        <span
+                            class="account-switcher-label pf-m-hidden pf-m-visible-on-2xl"
+                            >${label}</span
+                        >
+                        <i
+                            class="fas fa-caret-down pf-c-dropdown__toggle-icon"
+                            aria-hidden="true"
+                        ></i>
+                    </button>
+                    <menu class="pf-c-dropdown__menu pf-m-align-right">
+                        ${this.accountSessions.map((account) =>
+                            this.renderAccountMenuItem(account),
+                        )}
+                        ${this.accountSessions.length
+                            ? html`<hr class="pf-c-divider" />`
+                            : nothing}
+                        <li role="presentation">
+                            <button
+                                class="pf-c-dropdown__menu-item"
+                                type="button"
+                                role="menuitem"
+                                @click=${this.addAccount}
+                            >
+                                <i class="fas fa-plus" aria-hidden="true"></i
+                                >&nbsp;${msg("Use another account")}
+                            </button>
+                        </li>
+                        ${this.uiConfig?.enabledFeatures.settings
+                            ? html`<li role="presentation">
+                                  <a
+                                      class="pf-c-dropdown__menu-item"
+                                      role="menuitem"
+                                      href="${globalAK().api
+                                          .base}if/user/#/settings"
+                                  >
+                                      <i
+                                          class="fas fa-cog"
+                                          aria-hidden="true"
+                                      ></i
+                                      >&nbsp;${msg("Settings")}
+                                  </a>
+                              </li>`
+                            : nothing}
+                        <li role="presentation">
+                            <a
+                                class="pf-c-dropdown__menu-item"
+                                role="menuitem"
+                                href="${globalAK().api
+                                    .base}flows/-/default/invalidation/"
+                            >
+                                <i
+                                    class="fas fa-sign-out-alt"
+                                    aria-hidden="true"
+                                ></i
+                                >&nbsp;${msg("Sign out")}
+                            </a>
+                        </li>
+                    </menu>
+                </ak-dropdown>
+            </div>
         </div>`;
     }
 
     render() {
-        const displayName = formatUserDisplayName(this.currentUser, this.uiConfig);
+        const displayName = formatUserDisplayName(
+            this.currentUser,
+            this.uiConfig,
+        );
 
         return html`<div role="presentation" class="pf-c-page__header-tools">
             <div class="pf-c-page__header-tools-group">
@@ -202,29 +345,9 @@ export class NavigationButtons extends WithNotifications(WithSession(AKElement))
                 <!-- -->
                 ${this.renderNotificationDrawerTrigger()}
                 <!-- -->
-                ${this.renderSettings()}
-                <div class="pf-c-page__header-tools-item">
-                    <a
-                        href="${globalAK().api.base}flows/-/default/invalidation/"
-                        class="pf-c-button pf-m-plain"
-                        aria-label=${msg("Sign out")}
-                    >
-                        <pf-tooltip position="top" content=${msg("Sign out")}>
-                            <i class="fas fa-sign-out-alt" aria-hidden="true"></i>
-                        </pf-tooltip>
-                    </a>
-                </div>
                 <slot name="extra"></slot>
             </div>
-            ${this.renderImpersonation()}
-            ${displayName
-                ? html`<div class="pf-c-page__header-tools-group pf-m-hidden">
-                      <div class="pf-c-page__header-tools-item pf-m-visible-on-2xl">
-                          ${displayName}
-                      </div>
-                  </div>`
-                : nothing}
-            ${this.renderAvatar()}
+            ${this.renderImpersonation()} ${this.renderUserMenu(displayName)}
             <slot></slot>
         </div>`;
     }

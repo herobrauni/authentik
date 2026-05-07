@@ -17,7 +17,7 @@ from authentik.flows.challenge import ChallengeResponse, WithUserInfoChallenge
 from authentik.flows.planner import PLAN_CONTEXT_PENDING_USER
 from authentik.flows.stage import ChallengeStageView
 from authentik.lib.utils.time import timedelta_from_string
-from authentik.root.middleware import ClientIPMiddleware
+from authentik.root.middleware import ClientIPMiddleware, add_account_session
 from authentik.stages.password import BACKEND_INBUILT
 from authentik.stages.password.stage import (
     PLAN_CONTEXT_AUTHENTICATION_BACKEND,
@@ -169,6 +169,12 @@ class UserLoginStageView(ChallengeStageView):
                 user,
                 backend=backend,
             )
+        add_account_session(
+            request,
+            request.session.session_key,
+            user,
+            browser_close=request.session.get_expire_at_browser_close(),
+        )
         self.logger.debug(
             "Logged in",
             backend=backend,

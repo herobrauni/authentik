@@ -3,6 +3,7 @@
 from django.conf import settings
 from django.urls import path
 
+from authentik.core.api.account_sessions import AccountSessionViewSet
 from authentik.core.api.application_entitlements import ApplicationEntitlementViewSet
 from authentik.core.api.applications import ApplicationViewSet
 from authentik.core.api.authenticated_sessions import AuthenticatedSessionViewSet
@@ -22,6 +23,7 @@ from authentik.core.setup.views import SetupView
 from authentik.core.views.apps import RedirectToAppLaunch
 from authentik.core.views.debug import AccessDeniedView
 from authentik.core.views.interface import (
+    AccountSelectInterfaceView,
     BrandDefaultRedirectView,
     InterfaceView,
     RootRedirectView,
@@ -63,6 +65,11 @@ urlpatterns = [
         name="if-flow",
     ),
     path(
+        "if/account-select/",
+        AccountSelectInterfaceView.as_view(),
+        name="if-account-select",
+    ),
+    path(
         "setup",
         SetupView.as_view(),
         name="setup",
@@ -76,6 +83,7 @@ urlpatterns = [
 ]
 
 api_urlpatterns = [
+    ("core/account_sessions", AccountSessionViewSet, "accountsession"),
     ("core/authenticated_sessions", AuthenticatedSessionViewSet),
     ("core/applications", ApplicationViewSet),
     ("core/application_entitlements", ApplicationEntitlementViewSet),

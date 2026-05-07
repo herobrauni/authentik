@@ -13,6 +13,7 @@ from django.conf import settings
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.http.response import Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from django.utils import timezone, translation
 from django.utils.translation import gettext as _
 from structlog.stdlib import get_logger
@@ -24,6 +25,7 @@ from authentik.common.oauth.constants import (
     PROMPT_CONSENT,
     PROMPT_LOGIN,
     PROMPT_NONE,
+    PROMPT_SELECT_ACCOUNT,
     QS_LOGIN_HINT,
     SCOPE_GITHUB,
     SCOPE_OFFLINE_ACCESS,
@@ -31,7 +33,7 @@ from authentik.common.oauth.constants import (
     TOKEN_TYPE,
     UI_LOCALES,
 )
-from authentik.core.models import Application
+from authentik.core.models import Application, AuthenticatedSession, User
 from authentik.events.models import Event, EventAction
 from authentik.events.signals import get_login_event
 from authentik.flows.challenge import (
@@ -43,6 +45,7 @@ from authentik.flows.exceptions import FlowNonApplicableException
 from authentik.flows.models import Flow, in_memory_stage
 from authentik.flows.planner import PLAN_CONTEXT_APPLICATION, PLAN_CONTEXT_SSO, FlowPlanner
 from authentik.flows.stage import PLAN_CONTEXT_PENDING_USER_IDENTIFIER, StageView
+from authentik.flows.views.executor import NEXT_ARG_NAME
 from authentik.lib.utils.time import timedelta_from_string
 from authentik.lib.views import bad_request_message
 from authentik.policies.types import PolicyRequest
@@ -66,6 +69,7 @@ from authentik.providers.oauth2.models import (
 )
 from authentik.providers.oauth2.utils import HttpResponseRedirectScheme
 from authentik.providers.oauth2.views.userinfo import UserInfoView
+from authentik.root.middleware import ensure_current_account_session, get_account_session_entries
 from authentik.stages.consent.models import ConsentMode, ConsentStage
 from authentik.stages.consent.stage import (
     PLAN_CONTEXT_CONSENT_HEADER,
@@ -76,8 +80,9 @@ LOGGER = get_logger()
 
 PLAN_CONTEXT_PARAMS = "goauthentik.io/providers/oauth2/params"
 SESSION_KEY_LAST_LOGIN_UID = "authentik/providers/oauth2/last_login_uid"
+QS_ACCOUNT_SELECTED = "authentik_account_selected"
 
-ALLOWED_PROMPT_PARAMS = {PROMPT_NONE, PROMPT_CONSENT, PROMPT_LOGIN}
+ALLOWED_PROMPT_PARAMS = {PROMPT_NONE, PROMPT_CONSENT, PROMPT_LOGIN, PROMPT_SELECT_ACCOUNT}
 
 
 @dataclass(slots=True)
@@ -340,6 +345,47 @@ class AuthorizationFlowInitView(PolicyAccessView):
     # differently for github compat)
     github_compat = False
 
+    def _switchable_account_count(self) -> int:
+        ensure_current_account_session(self.request)
+        entries = get_account_session_entries(self.request)
+        session_keys = [entry["sid"] for entry in entries]
+        if not session_keys:
+            return 0
+        active_user_ids = set(
+            AuthenticatedSession.objects.filter(
+                session__session_key__in=session_keys,
+                session__expires__gt=timezone.now(),
+                user__is_active=True,
+            )
+            .values_list("user_id", flat=True)
+        )
+        known_user_pks = [entry["user_pk"] for entry in entries if "user_pk" in entry]
+        known_user_ids = set(
+            User.objects.filter(pk__in=known_user_pks)
+            .exclude_anonymous()
+            .filter(is_active=True)
+            .values_list("pk", flat=True)
+        )
+        return len(active_user_ids | known_user_ids)
+
+    def _should_select_account(self) -> bool:
+        if QS_ACCOUNT_SELECTED in self.request.GET:
+            return False
+        if PROMPT_NONE in self.params.prompt:
+            return False
+        switchable_accounts = self._switchable_account_count()
+        if PROMPT_SELECT_ACCOUNT in self.params.prompt:
+            return switchable_accounts > 0
+        return switchable_accounts > 1
+
+    def _account_select_redirect(self) -> HttpResponseRedirect:
+        query = self.request.GET.copy()
+        query[QS_ACCOUNT_SELECTED] = "1"
+        next_url = f"{self.request.path}?{query.urlencode()}"
+        return HttpResponseRedirect(
+            f"{reverse('authentik_core:if-account-select')}?{urlencode({NEXT_ARG_NAME: next_url})}"
+        )
+
     def pre_permission_check(self):
         """Check prompt parameter before checking permission/authentication,
         see https://openid.net/specs/openid-connect-core-1_0.html#rfc.section.3.1.2.6"""
@@ -369,6 +415,8 @@ class AuthorizationFlowInitView(PolicyAccessView):
                 self.params.state,
             )
             raise RequestValidationError(error.get_response(self.request))
+        if self._should_select_account():
+            raise RequestValidationError(self._account_select_redirect())
 
     def resolve_provider_application(self):
         client_id = self.request.GET.get("client_id")

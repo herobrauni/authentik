@@ -1,5 +1,6 @@
 """Test authorize view"""
 
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
@@ -10,12 +11,17 @@ from django.utils.timezone import now
 
 from authentik.blueprints.tests import apply_blueprint
 from authentik.common.oauth.constants import SCOPE_OFFLINE_ACCESS, SCOPE_OPENID, TOKEN_TYPE
-from authentik.core.models import Application
-from authentik.core.tests.utils import create_test_admin_user, create_test_brand, create_test_flow
+from authentik.core.models import Application, AuthenticatedSession, Session
+from authentik.core.tests.utils import (
+    create_test_admin_user,
+    create_test_brand,
+    create_test_flow,
+    create_test_user,
+)
 from authentik.events.models import Event, EventAction
 from authentik.flows.models import FlowStageBinding
 from authentik.flows.stage import PLAN_CONTEXT_PENDING_USER_IDENTIFIER
-from authentik.flows.views.executor import SESSION_KEY_PLAN
+from authentik.flows.views.executor import NEXT_ARG_NAME, SESSION_KEY_PLAN
 from authentik.lib.generators import generate_id
 from authentik.lib.utils.time import timedelta_from_string
 from authentik.providers.oauth2.errors import AuthorizeError, ClientIdError, RedirectUriError
@@ -29,7 +35,12 @@ from authentik.providers.oauth2.models import (
     ScopeMapping,
 )
 from authentik.providers.oauth2.tests.utils import OAuthTestCase
-from authentik.providers.oauth2.views.authorize import OAuthAuthorizationParams
+from authentik.providers.oauth2.views.authorize import QS_ACCOUNT_SELECTED, OAuthAuthorizationParams
+from authentik.root.middleware import (
+    ACCOUNT_SESSION_COOKIE_NAME,
+    ClientIPMiddleware,
+    encode_account_sessions,
+)
 from authentik.stages.dummy.models import DummyStage
 from authentik.stages.password.stage import PLAN_CONTEXT_METHOD
 
@@ -40,6 +51,40 @@ class TestAuthorize(OAuthTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.factory = RequestFactory()
+
+    def _create_authorize_provider(self) -> OAuth2Provider:
+        flow = create_test_flow()
+        provider = OAuth2Provider.objects.create(
+            name=generate_id(),
+            client_id=generate_id(),
+            authorization_flow=flow,
+            redirect_uris=[RedirectURI(RedirectURIMatchingMode.STRICT, "foo://localhost")],
+            access_code_validity="seconds=100",
+            grant_types=[GrantType.AUTHORIZATION_CODE],
+        )
+        Application.objects.create(name=generate_id(), slug=generate_id(), provider=provider)
+        return provider
+
+    def _create_authenticated_session(self, user) -> AuthenticatedSession:
+        session = Session.objects.create(
+            session_key=generate_id(),
+            session_data=b"",
+            last_ip=ClientIPMiddleware.default_ip,
+            expires=now() + timedelta(hours=1),
+        )
+        return AuthenticatedSession.objects.create(session=session, user=user)
+
+    def _assert_account_select_redirect(self, response, provider: OAuth2Provider):
+        self.assertEqual(response.status_code, 302)
+        parsed = urlparse(response.url)
+        self.assertEqual(parsed.path, reverse("authentik_core:if-account-select"))
+        next_url = parse_qs(parsed.query)[NEXT_ARG_NAME][0]
+        next_parsed = urlparse(next_url)
+        self.assertEqual(next_parsed.path, reverse("authentik_providers_oauth2:authorize"))
+        next_query = parse_qs(next_parsed.query)
+        self.assertEqual(next_query["client_id"], [provider.client_id])
+        self.assertEqual(next_query[QS_ACCOUNT_SELECTED], ["1"])
+        return next_query
 
     def test_disallowed_grant_type(self):
         """Test with disallowed grant type"""
@@ -352,6 +397,82 @@ class TestAuthorize(OAuthTestCase):
             timedelta_from_string(provider.access_code_validity).total_seconds(),
             delta=5,
         )
+
+    def test_select_account_prompt_redirects(self):
+        """prompt=select_account redirects to the account chooser."""
+        provider = self._create_authorize_provider()
+        self.client.force_login(create_test_admin_user())
+
+        response = self.client.get(
+            reverse("authentik_providers_oauth2:authorize"),
+            data={
+                "response_type": "code",
+                "client_id": provider.client_id,
+                "state": generate_id(),
+                "redirect_uri": "foo://localhost",
+                "prompt": "select_account",
+            },
+        )
+
+        next_query = self._assert_account_select_redirect(response, provider)
+        self.assertEqual(next_query["prompt"], ["select_account"])
+
+    def test_select_account_multiple_accounts_redirects(self):
+        """Multiple connected accounts redirect to the account chooser."""
+        provider = self._create_authorize_provider()
+        user = create_test_admin_user()
+        other_user = create_test_user("other-user")
+        other_session = self._create_authenticated_session(other_user)
+        self.client.force_login(user)
+        self.client.cookies[ACCOUNT_SESSION_COOKIE_NAME] = encode_account_sessions(
+            [
+                {
+                    "sid": other_session.session.session_key,
+                    "user_pk": other_user.pk,
+                    "browser_close": True,
+                }
+            ]
+        )
+
+        response = self.client.get(
+            reverse("authentik_providers_oauth2:authorize"),
+            data={
+                "response_type": "code",
+                "client_id": provider.client_id,
+                "state": generate_id(),
+                "redirect_uri": "foo://localhost",
+            },
+        )
+
+        self._assert_account_select_redirect(response, provider)
+
+    def test_select_account_disconnected_account_redirects(self):
+        """Disconnected connected accounts still redirect to the account chooser."""
+        provider = self._create_authorize_provider()
+        user = create_test_admin_user()
+        other_user = create_test_user("other-user")
+        self.client.force_login(user)
+        self.client.cookies[ACCOUNT_SESSION_COOKIE_NAME] = encode_account_sessions(
+            [
+                {
+                    "sid": generate_id(),
+                    "user_pk": other_user.pk,
+                    "browser_close": True,
+                }
+            ]
+        )
+
+        response = self.client.get(
+            reverse("authentik_providers_oauth2:authorize"),
+            data={
+                "response_type": "code",
+                "client_id": provider.client_id,
+                "state": generate_id(),
+                "redirect_uri": "foo://localhost",
+            },
+        )
+
+        self._assert_account_select_redirect(response, provider)
 
     @apply_blueprint("system/providers-oauth2.yaml")
     def test_full_implicit(self):

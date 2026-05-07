@@ -87,3 +87,9 @@ class BrandDefaultRedirectView(InterfaceView):
             response.error_message = _("Interface can only be accessed by internal users.")
             return response
         return super().dispatch(request, *args, **kwargs)
+
+
+class AccountSelectInterfaceView(InterfaceView):
+    """Account selection interface."""
+
+    template_name = "if/account_select.html"

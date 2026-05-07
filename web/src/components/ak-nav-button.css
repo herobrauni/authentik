@@ -18,3 +18,57 @@
         background-color: var(--pf-global--BackgroundColor--dark-300);
     }
 }
+
+.account-switcher {
+    .pf-c-dropdown__menu {
+        inset-inline-end: 0;
+        min-width: 20rem;
+    }
+}
+
+.account-switcher-toggle {
+    align-items: center;
+    display: flex;
+    gap: var(--pf-global--spacer--sm);
+}
+
+.account-switcher-avatar {
+    width: 2rem;
+    height: 2rem;
+}
+
+.account-switcher-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    color: var(--pf-global--Color--200);
+    font-size: 1.5rem;
+}
+
+.account-switcher-item {
+    display: flex;
+    align-items: center;
+    gap: var(--pf-global--spacer--sm);
+}
+
+.account-switcher-text {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+}
+
+.account-switcher-name,
+.account-switcher-meta,
+.account-switcher-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.account-switcher-meta,
+.account-switcher-status {
+    color: var(--pf-global--Color--200);
+}

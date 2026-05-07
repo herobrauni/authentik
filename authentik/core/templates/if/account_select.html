@@ -1,0 +1,26 @@
+{% extends "base/skeleton.html" %}
+
+{% load i18n %}
+{% load authentik_core %}
+
+{% block head_before %}
+{{ block.super }}
+{% include "base/header_js.html" %}
+{% endblock %}
+
+{% block interface_stylesheet %}
+<link rel="stylesheet" type="text/css" href="{% versioned_script 'dist/styles/flow-%v.css' %}" />
+{% endblock %}
+
+{% block head %}
+<script src="{% versioned_script 'dist/flow/FlowInterface-%v.js' %}" type="module"></script>
+{% endblock %}
+
+{% block body %}
+<ak-skip-to-content></ak-skip-to-content>
+<ak-message-container></ak-message-container>
+<ak-account-select class="pf-c-login">
+    {% include "base/placeholder.html" %}
+    <ak-brand-links name="flow-links" slot="footer"></ak-brand-links>
+</ak-account-select>
+{% endblock %}
