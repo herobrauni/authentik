@@ -33,7 +33,7 @@ from authentik.common.oauth.constants import (
     TOKEN_TYPE,
     UI_LOCALES,
 )
-from authentik.core.models import Application, AuthenticatedSession, User
+from authentik.core.models import Application, AuthenticatedSession
 from authentik.events.models import Event, EventAction
 from authentik.events.signals import get_login_event
 from authentik.flows.challenge import (
@@ -351,22 +351,15 @@ class AuthorizationFlowInitView(PolicyAccessView):
         session_keys = [entry["sid"] for entry in entries]
         if not session_keys:
             return 0
-        active_user_ids = set(
-            AuthenticatedSession.objects.filter(
-                session__session_key__in=session_keys,
-                session__expires__gt=timezone.now(),
-                user__is_active=True,
+        return len(
+            set(
+                AuthenticatedSession.objects.filter(
+                    session__session_key__in=session_keys,
+                    session__expires__gt=timezone.now(),
+                    user__is_active=True,
+                ).values_list("user_id", flat=True)
             )
-            .values_list("user_id", flat=True)
         )
-        known_user_pks = [entry["user_pk"] for entry in entries if "user_pk" in entry]
-        known_user_ids = set(
-            User.objects.filter(pk__in=known_user_pks)
-            .exclude_anonymous()
-            .filter(is_active=True)
-            .values_list("pk", flat=True)
-        )
-        return len(active_user_ids | known_user_ids)
 
     def _should_select_account(self) -> bool:
         if QS_ACCOUNT_SELECTED in self.request.GET:
