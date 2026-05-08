@@ -7,7 +7,9 @@ from django.contrib.auth.mixins import AccessMixin
 from django.http import HttpRequest
 from django.http.response import HttpResponse
 from django.shortcuts import redirect
+from django.utils.decorators import method_decorator
 from django.utils.translation import gettext as _
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic.base import RedirectView, TemplateView
 
 from authentik import authentik_build_hash
@@ -89,6 +91,7 @@ class BrandDefaultRedirectView(InterfaceView):
         return super().dispatch(request, *args, **kwargs)
 
 
+@method_decorator(ensure_csrf_cookie, name="dispatch")
 class AccountSelectInterfaceView(InterfaceView):
     """Account selection interface."""
 

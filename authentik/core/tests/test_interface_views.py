@@ -1,5 +1,6 @@
 """Test interface view redirect behavior by user type"""
 
+from django.conf import settings
 from django.test import TestCase
 from django.urls import reverse
 
@@ -89,6 +90,17 @@ class TestInterfaceRedirects(TestCase):
     def test_if_admin_internal_user(self):
         """Internal users are NOT redirected to the app from if/admin/"""
         self._assert_no_redirect("if-admin", UserTypes.INTERNAL)
+
+    def test_account_select_sets_csrf_cookie(self):
+        """Account selection page sets a CSRF cookie for account switch POSTs."""
+        user = create_test_user(type=UserTypes.INTERNAL)
+        self.client.force_login(user)
+        self.client.cookies.pop(settings.CSRF_COOKIE_NAME, None)
+
+        response = self.client.get(reverse("authentik_core:if-account-select"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(settings.CSRF_COOKIE_NAME, response.cookies)
 
     # --- No default app set ---
 
