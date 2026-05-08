@@ -54,6 +54,7 @@ class TestAccountSessionsAPI(APITestCase):
 
     def test_list_disconnected_session(self):
         """Missing session entries are returned as disconnected accounts."""
+        self.client.force_login(self.user)
         self._set_account_cookie(
             [
                 {
@@ -67,12 +68,14 @@ class TestAccountSessionsAPI(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         body = loads(response.content)
-        self.assertEqual(len(body), 1)
-        self.assertEqual(set(body[0]["user"]), {"pk", "username", "name", "email", "avatar"})
-        self.assertEqual(body[0]["user"]["username"], self.other_user.username)
-        self.assertFalse(body[0]["active"])
-        self.assertTrue(body[0]["disconnected"])
-        self.assertIsNone(body[0]["session_uuid"])
+        # Current user + disconnected other user
+        disconnected = [a for a in body if a["disconnected"]]
+        self.assertEqual(len(disconnected), 1)
+        self.assertEqual(set(disconnected[0]["user"]), {"pk", "username", "name", "email", "avatar"})
+        self.assertEqual(disconnected[0]["user"]["username"], self.other_user.username)
+        self.assertFalse(disconnected[0]["active"])
+        self.assertTrue(disconnected[0]["disconnected"])
+        self.assertIsNone(disconnected[0]["session_uuid"])
 
     def test_switch_session(self):
         """Switch active session cookie to another connected account."""

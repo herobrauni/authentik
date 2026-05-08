@@ -14,7 +14,7 @@ from rest_framework.fields import (
     SerializerMethodField,
     UUIDField,
 )
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
@@ -94,7 +94,7 @@ class AccountSessionViewSet(GenericViewSet):
     serializer_class = AccountSessionSerializer
     pagination_class = None
     filter_backends = []
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def _entry_browser_close(self, request: HttpRequest, session_key: str) -> bool:
         for entry in get_account_session_entries(request):
@@ -191,18 +191,19 @@ class AccountSessionViewSet(GenericViewSet):
             or auth_session.session.expires <= now()
         ):
             return Response(status=404)
+        browser_close = self._entry_browser_close(http_request, auth_session.session.session_key)
         set_session_cookie_override(
             http_request,
             auth_session.session.session_key,
             auth_session.user,
-            browser_close=self._entry_browser_close(http_request, auth_session.session.session_key),
+            browser_close=browser_close,
             expires=auth_session.session.expires,
         )
         add_account_session(
             http_request,
             auth_session.session.session_key,
             auth_session.user,
-            browser_close=self._entry_browser_close(http_request, auth_session.session.session_key),
+            browser_close=browser_close,
         )
         return Response(status=204)
 

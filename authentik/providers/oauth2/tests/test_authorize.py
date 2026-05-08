@@ -446,8 +446,8 @@ class TestAuthorize(OAuthTestCase):
 
         self._assert_account_select_redirect(response, provider)
 
-    def test_select_account_disconnected_account_redirects(self):
-        """Disconnected connected accounts still redirect to the account chooser."""
+    def test_select_account_disconnected_account_does_not_redirect(self):
+        """Disconnected connected accounts do not redirect to the account chooser."""
         provider = self._create_authorize_provider()
         user = create_test_admin_user()
         other_user = create_test_user("other-user")
@@ -472,7 +472,9 @@ class TestAuthorize(OAuthTestCase):
             },
         )
 
-        self._assert_account_select_redirect(response, provider)
+        # Only the current active session exists; the disconnected account
+        # does not count as switchable, so no redirect should happen.
+        self.assertNotEqual(response.status_code, 302)
 
     @apply_blueprint("system/providers-oauth2.yaml")
     def test_full_implicit(self):

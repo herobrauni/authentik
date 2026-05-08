@@ -93,3 +93,8 @@ class AccountSelectInterfaceView(InterfaceView):
     """Account selection interface."""
 
     template_name = "if/account_select.html"
+
+    def dispatch(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponse:
+        if not request.user.is_authenticated:
+            return redirect("authentik_core:root-redirect")
+        return super().dispatch(request, *args, **kwargs)
