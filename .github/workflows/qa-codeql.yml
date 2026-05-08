@@ -2,12 +2,11 @@
 name: QA - CodeQL
 
 on:
-  push:
-    branches: [main, next, version*]
+  workflow_dispatch:
+  # push:
+  #   branches: [main, next, version*]
   pull_request:
     branches: [main]
-  schedule:
-    - cron: "30 6 * * 5"
 
 jobs:
   analyze:

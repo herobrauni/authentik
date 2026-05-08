@@ -2,15 +2,15 @@
 name: Packages - Publish NPM packages
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - packages/tsconfig/**
-      - packages/eslint-config/**
-      - packages/prettier-config/**
-      - packages/docusaurus-config/**
-      - packages/esbuild-plugin-live-reload/**
   workflow_dispatch:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - packages/tsconfig/**
+  #     - packages/eslint-config/**
+  #     - packages/prettier-config/**
+  #     - packages/docusaurus-config/**
+  #     - packages/esbuild-plugin-live-reload/**
 
 permissions:
   # Required for NPM OIDC trusted publisher

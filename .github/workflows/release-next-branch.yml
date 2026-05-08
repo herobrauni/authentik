@@ -2,8 +2,6 @@
 name: Release - Update next branch
 
 on:
-  schedule:
-    - cron: "0 12 * * *" # every day at noon
   workflow_dispatch:
 
 permissions:

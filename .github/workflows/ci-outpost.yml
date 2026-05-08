@@ -2,11 +2,12 @@
 name: CI - Outpost
 
 on:
-  push:
-    branches:
-      - main
-      - next
-      - version-*
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - main
+  #     - next
+  #     - version-*
   pull_request:
     branches:
       - main

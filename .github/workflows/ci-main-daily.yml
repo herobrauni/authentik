@@ -3,9 +3,6 @@ name: CI - Main daily
 
 on:
   workflow_dispatch:
-  schedule:
-    # Every night at 3am
-    - cron: "0 3 * * *"
   pull_request:
     paths:
       # Needs to refer to itself

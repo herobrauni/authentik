@@ -2,8 +2,6 @@
 name: Translation - Extract and compile
 
 on:
-  schedule:
-    - cron: "0 0 * * *" # every day at midnight
   workflow_dispatch:
   pull_request:
     branches:
