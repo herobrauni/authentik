@@ -22,9 +22,12 @@ Gestionnaire
 ghec
 Gitea
 Gravitee
+HACS
 Homarr
 Informatique
+Jellyseerr
 Kimai
+Kiota
 Knoc
 Knocknoc
 Komodo
@@ -50,6 +53,7 @@ Plesk
 proftpd
 Qube
 Relatedly
+Seerr
 Sidero
 snipeit
 sonarqube
@@ -61,7 +65,6 @@ Vikunja
 Wazuh
 Wdio
 Weixin
-Kiota
 Wekan
 Xcreds
 Zammad
