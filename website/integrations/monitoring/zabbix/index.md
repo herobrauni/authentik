@@ -37,7 +37,6 @@ To support the integration of Zabbix with authentik, you need to create an appli
 - **Configure the Provider**: provide a name (or accept the auto-provided name), the authorization flow to use for this provider, and the following required configurations.
     - Set the **ACS URL** to `https://zabbix.company/index_sso.php?acs`.
     - Set the **Audience** to `https://zabbix.company/zabbix`.
-    - Set the **Service Provider Binding** to `Post`.
     - Set the **Single Logout Service** to `https://zabbix.company/index_sso.php?sls`.
     - Set the **SLS Binding** to `Redirect`.
     - Set the **Logout Method** to `Front-channel (Iframe)`.
